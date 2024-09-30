@@ -1,0 +1,17 @@
+{
+    "CdkAppName": "SMSGenAIDemo",
+    "CdkBackendStack": "SMSGenAIDemo",
+    "hierarchy": "/SMSGenAIDemo/",
+    "parameters": [
+        {
+            "name": "originationNumberId",
+            "cliFormat": "origination-number-id",
+            "description": "The ID of the Origination Phone number you want to use.  Can be found in the End User Messaging SMS console. [TODO: add more instructions on finding this ID]",
+            "required": true
+        }
+    ],
+    "tags": {
+        "project": "Two Way SMS Chat with a Generative AI Chatbot",
+        "os-code-source": "https://github.com/aws-samples/two-way-sms-chat-with-a-generative-ai-chatbot"
+    }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "cdk-stacks",
+  "version": "0.0.1",
+  "description": "Amazon Pinpoint LLM Chatbot",
+  "main": "configure.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "configure": "node configure.js -il",
+    "configure:test": "node configure.js -ilt",
+    "install:webapp": "cd ../webapp && npm install",
+    "install:cdk-stacks": "npm install",
+    "install:lambda-layer": "cd lambda-layer/nodejs && npm install",
+    "install:lambdas": "cd lib/lambdas/handlers/node && npm install",
+    "install:all": "npm run install:cdk-stacks && npm run install:lambdas",
+    "echo:web-app-root-prefix": "node -e 'var config=require(`./config.params.json`); console.log(`${config.WebAppRootPrefix}`)' ",
+    "echo:cdk-frontend-stack-name-param": "node -e 'var config=require(`./config.params.json`); console.log(`${config.hierarchy}outputParameters/CdkFrontendStackName`)' ",
+    "echo:cdk-frontend-stack-physical-name": "aws ssm get-parameter --query 'Parameter'.'Value' --name $(npm run --silent echo:cdk-frontend-stack-name-param) --output text",
+    "echo:web-app-bucket": "aws cloudformation describe-stacks --stack-name $(npm run --silent echo:cdk-frontend-stack-physical-name) --query 'Stacks[0].Outputs[?OutputKey==`webAppBucket`].OutputValue' --output text",
+    "sync-config:webapp": "aws s3 cp s3://$(npm run --silent echo:web-app-bucket)/$(npm run --silent echo:web-app-root-prefix)frontend-config.js ../webapp/",
+    "sync-config": "npm run --silent sync-config:webapp",
+    "build:webapp": "cd ../webapp && npm run-script build",
+    "build:webapp:gitbash": "cd ../webapp && npm run-script build:gitbash",
+    "build:frontend": "npm run build:webapp",
+    "build:frontend:gitbash": "npm run build:webapp:gitbash",
+    "cdk:remove:context": "rm -f cdk.context.json",
+    "cdk:deploy": "npm run cdk:remove:context && cdk deploy --all --disable-rollback -c application_version=$npm_package_version",
+    "cdk:deploy:gitbash": "npm run cdk:remove:context && winpty cdk.cmd deploy --all --disable-rollback -c application_version=$npm_package_version",
+    "build:deploy:all": "npm run build:frontend && npm run cdk:deploy",
+    "build:deploy:all:gitbash": "npm run build:frontend:gitbash && npm run cdk:deploy:gitbash",
+    "cdk:synth": "cdk synth -c application_version=$npm_package_version"
+  },
+  "author": "prod-apps-builder-team",
+  "license": "MIT-0",
+  "devDependencies": {
+    "@types/node": "^18.7.16",
+    "cdk-nag": "^2.27.108",
+    "constructs": "^10.2.69",
+    "esbuild": "^0.19.2",
+    "jest": "^29.6.3",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.395.0",
+    "@cdklabs/generative-ai-cdk-constructs": "^0.1.224",
+    "aws-cdk": "^2.150.0",
+    "aws-cdk-lib": "^2.150.0",
+    "source-map-support": "^0.5.21"
+  }
+}

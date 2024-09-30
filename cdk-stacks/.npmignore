@@ -1,0 +1,26 @@
+# *.js
+!jest.config.js
+*.d.ts
+node_modules/
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# Parcel default cache directory
+.parcel-cache
+
+# CDK js
+cdk-backend*.js
+
+# CDK config, produced by configure.sh
+config.cache.json
+
+# Local template file
+template.yaml
+
+# CDK context - auto-generated
+cdk.context.json
+
+#build folder
+build
