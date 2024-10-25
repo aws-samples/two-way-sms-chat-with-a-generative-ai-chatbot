@@ -1,13 +1,51 @@
 {
-    "CdkAppName": "SMSGenAIDemo",
-    "CdkBackendStack": "SMSGenAIDemo",
-    "hierarchy": "/SMSGenAIDemo/",
+    "CdkAppName": "MultiChannelGenAIDemo",
+    "CdkBackendStack": "MultiChannelGenAIDemo",
+    "hierarchy": "/MultiChannelGenAIDemo/",
     "parameters": [
+        {
+            "name": "smsEnabled",
+            "cliFormat": "sms-enabled",
+            "description": "Set to true to enable SMS support",
+            "defaultValue": false,
+            "required": true,
+            "boolean": true
+        },
         {
             "name": "originationNumberId",
             "cliFormat": "origination-number-id",
-            "description": "The ID of the Origination Phone number you want to use.  Can be found in the End User Messaging SMS console. [TODO: add more instructions on finding this ID]",
+            "description": "The ID of the Origination Phone number you want to use.  Can be found in the End User Messaging SMS console.",
             "required": true
+        },
+        {
+            "name": "whatsappEnabled",
+            "cliFormat": "whatsapp-enabled",
+            "description": "Set to true to enable WhatsApp support",
+            "defaultValue": false,
+            "required": true,
+            "boolean": true
+        },
+        {
+            "name": "eumWhatsappOriginationNumberId",
+            "cliFormat": "whatsapp-origination-number-id",
+            "description": "The ID of the WhatsAppOrigination Phone number you want to use.  Can be found in the End User Messaging WhatsApp console.",
+            "required": true,
+            "parent": "whatsappEnabled"
+        },
+        {
+            "name": "eumWhatsappSNSTopicArn",
+            "cliFormat": "whatsapp-sns-topic-arn",
+            "description": "The ARN of the SNS Topic that was used when configuring your WhatsApp Business Account.",
+            "required": true,
+            "parent": "whatsappEnabled"
+        },
+        {
+            "name": "cloudsearchReplicasEnabled",
+            "cliFormat": "cloudsearch-replicas-enabled",
+            "description": "In order to save costs, you can disable replicas on the CloudSearch collection. We recommend leaving this set to false for development and testing and setting it to true for production environments.",
+            "defaultValue": false,
+            "required": true,
+            "boolean": true
         }
     ],
     "tags": {

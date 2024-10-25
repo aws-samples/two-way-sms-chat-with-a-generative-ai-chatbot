@@ -1,4 +1,4 @@
-# two-way-sms-chat-with-a-generative-ai-chatbot
+# multi-channel-chat-with-a-generative-ai-chatbot
 
 >**BE AWARE:** This code base is an [Open Source](LICENSE) starter project designed to provide a demonstration and a base to start from for specific use cases. 
 It should not be considered fully Production-ready.
@@ -6,7 +6,7 @@ If you plan to deploy and use this in a Production environment please review the
 
 ## Use-case scenario
 
-Demonstrates how you can use Amazon End User Messaging 2-way SMS to send and receive messages from Amazon Bedrock Knowledge Base.  Allows end users to answer questions from an Amazon Bedrock Knowledge Base that is built off documents stored in S3, or crawled from a public facing website.
+Demonstrates how you can use AWS End User Messaging 2-way SMS and WhatsApp to send and receive messages from Amazon Bedrock Knowledge Base.  Allows end users to answer questions from an Amazon Bedrock Knowledge Base that is built off documents stored in S3, or crawled from a public facing website.
 
 ![Demo](demo.gif)
 
@@ -28,8 +28,8 @@ On a high-level, the solution consists of the following components, each contain
 * Node (> v18) and NPM (> v8.19) [installed and configured on your computer](https://nodejs.org/en/download/package-manager)
 * AWS CLI (v2) [installed and configured on your computer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 * AWS CDK (v2) [installed and configured on your computer](https://docs.aws.amazon.com/cdk/v2/guide/getting_started).
-* [SMS Channel enabled](https://docs.aws.amazon.com/pinpoint/latest/userguide/channels-sms-setup.html) in Amazon Pinpoint
-* An [SMS Origination Phone Number provisioned](https://docs.aws.amazon.com/sms-voice/latest/userguide/phone-numbers-request.html) in Amazon End User Messaging
+* If configuring SMS: An [ACTIVE SMS Origination Phone Number provisioned](https://docs.aws.amazon.com/sms-voice/latest/userguide/phone-numbers-request.html) in AWS End User Messaging SMS. Note: This must be an Active number that has been registered. Within the US, you can use 10DLC or Toll Free Numbers (TFNs).
+* If configuring WhatsApp: An [ACTIVE WhatsApp Origination Phone Number provisioned](https://docs.aws.amazon.com/social-messaging/latest/userguide/getting-started.html) in AWS End User Messaging Social. Note: This must be an Active number that has been registered with Meta/WhatsApp.
 
 ## Solution setup
 
@@ -59,7 +59,13 @@ These instructions assume you have completed all the prerequisites, and you have
     - (You can configure it via single command, by directly providing parameters, as described in the script help instructions which you can see by running 
       `node configure.js -h`)
     - When prompted, provide the following parameters:
-        - `origination-number-id`: The ID of the Origination Phone number you want to use.  Can be found in the AWS End User Messaging SMS console by clicking on `Configurations -> Phone numbers` and selecting the phone number you want to use.  The ID is the `Phone number ID` column.  NOTE:This phone number must not have 2-way SMS enabled.
+
+        - `sms-enabled`: Set to true to enable SMS support
+            - `origination-number-id`: The ID of the Origination Phone number you want to use.  Can be found in the AWS End User Messaging SMS console by clicking on `Configurations -> Phone numbers` and selecting the phone number you want to use.  The ID is the `Phone number ID` column.  NOTE:This phone number must not have 2-way SMS enabled.
+        - `whatsapp-enabled`: Set to true to enable WhatsApp support
+            - `whatsapp-origination-number-id`: The ID of the Origination Phone number you want to use.  Can be found in the AWS End User Messaging WhatsApp console. 
+            - `whatsapp-sns-topic-arn`: The ARN of the SNS Topic that was used when configuring your WhatsApp Business Account.
+        - `cloudsearch-replicas-enabled`: In order to save costs, you can disable replicas on the CloudSearch collection. We recommend leaving this set to false for development and testing and setting it to true for production environments.
 
 5. Deploy CDK stacks
     - In your terminal navigate to `two-way-sms-chat-with-a-generative-ai-chatbot/cdk-stacks`
@@ -81,15 +87,33 @@ These instructions assume you have completed all the prerequisites, and you have
     - Click on `Sync` button to start the ingestion job.  This can take a while to complete if the data source is large. 
 
 8. Test the solution
-    - Text `start` to the Pinpoint Phone Number you selected.  You should receive a response from the solution with instructions to proceed with the demo.
+    - Using either SMS or WhatsApp, send  `start` to the AWS End User Messaging Phone Number you selected.  You should receive a response from the solution with instructions to proceed with the demo.
 
 ## Bedrock Web Crawler Knowledge Base
 By default, the solution will create a Bedrock Knowledge Based using an S3 Bucket as the datasource.  If you would like to use the Web Crawler instead, you can uncomment the WebCrawler section in the `ccdk-stacks/lib/cdk-backend-stack.ts` file.  
 
+## Conversational Data
+This solution will store conversational data in Amazon DynamoDB. Using [DynamoDB TTL](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html), this data is automatically removed after 10 minutes.  This can be configured by changing the `SESSION_SECONDS` variable in the `cdk-stacks/lib/cdk-backend-stack.ts` file.
+
+If you need to use this data for other purposes such as AI/ML training or other analytics, you can look at [DynamoDB Streams](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/time-to-live-ttl-streams.html) to persist the data in another service.
+
+The `ChatContext` table has the following structure:
+- `phoneNumber` (Partition Key) - Incoming phone number
+- `messageId` (Sort Key) - The messageId generated by AWS End User Messaging
+- `channel` - The channel the message was sent from (SMS or WhatsApp)
+- `direction` - The direction of the message (inbound or outbound)
+- `knowledgeBaseId` - The ID of the Bedrock Knowledge Base used in the conversation
+- `message` - The message sent by the end user or the response from the Bedrock Knowledge Base
+- `originationNumberId` - The ID of the Origination Phone number used in the conversation
+- `previousPublishedMessageId` - The ID of the previous published message in the conversation. Note this only applies to SMS
+- `sessionId` - The Bedrock Knowledge Base Session ID
+- `source` - Indicates if the question was answered by the Bedrock Knowledge Base or the General LLM
+- `timestamp` - The timestamp of the message.  Note: there is a secondary index on phoneNumber and timestamp so that you can query the table for messages sent by a particular phone number and have the conversation ordered chronologically.
+- `ttl` - The [DynamoDB TTL](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) for the message.  This is used to automatically remove the conversation after the conversation has ended.
+
 ## Troubleshooting
-- If you don't receive a response from the Pinpoint Phone Number you selected, please check the following:
-    - Ensure that the phone number you selected is a SMS enabled End User Messaging number
-    - Ensure that the phone number has been configured as an SMS Origination number
+- If you don't receive a response from the AWS End User Messaging Phone Number you selected, please check the following:
+    - Ensure that the phone number you selected is a SMS or WhatsApp enabled End User Messaging number
     - Inspect the CloudWatch Logs for the `ChatProcessor` Lambda function to ensure it is processing messages correctly
         - For more detailed logs you can [Set the Log Level to TRACE](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs-advanced.html#monitoring-cloudwatchlogs-log-level-setting)
     - Check the `ChatProcessor` Lambda function's `Environment Variables` and ensure that the `KNOWLEDGE_BASE_ID` is correct

@@ -12,6 +12,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as kms from "aws-cdk-lib/aws-kms"
 import { bedrock } from "@cdklabs/generative-ai-cdk-constructs";
+import * as opensearchserverless from '@cdklabs/generative-ai-cdk-constructs/lib/cdk-lib/opensearchserverless';
 import * as logs from "aws-cdk-lib/aws-logs"
 import { loadSSMParams } from '../lib/infrastructure/ssm-params-util';
 import { NagSuppressions } from 'cdk-nag'
@@ -72,6 +73,10 @@ export class CdkBackendStack extends Stack {
       "docsKnowledgeBase",
       {
         embeddingsModel: bedrock.BedrockFoundationModel.TITAN_EMBED_TEXT_V2_1024,
+        vectorStore: new opensearchserverless.VectorCollection(this, 'VectorCollection', {
+          collectionName: `${configParams.CdkAppName.toLowerCase()}collection`,
+          standbyReplicas: ssmParams.cloudsearchReplicasEnabled ? opensearchserverless.VectorCollectionStandbyReplicas.ENABLED : opensearchserverless.VectorCollectionStandbyReplicas.DISABLED,
+        }), 
       }
     );
 
@@ -88,7 +93,7 @@ export class CdkBackendStack extends Stack {
       }
     );
 
-    NagSuppressions.addResourceSuppressionsByPath(this, '/SMSGenAIDemo/LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a/ServiceRole/DefaultPolicy/Resource', [
+    NagSuppressions.addResourceSuppressionsByPath(this, '/MultiChannelGenAIDemo/LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a/ServiceRole/DefaultPolicy/Resource', [
       {
         id: 'AwsSolutions-IAM5',
         reason: 'This is the Log Retention Policies created by the Bedrock CDK Construct for the Open Search Logs. We dont have control over this policy, but it would need to create delete policies at the account level, so not sure how it would scope this down any further.'
@@ -180,7 +185,7 @@ export class CdkBackendStack extends Stack {
       ]
     });
 
-    NagSuppressions.addResourceSuppressionsByPath(this, '/SMSGenAIDemo/ConfigLambda/ServiceRole/DefaultPolicy/Resource', [
+    NagSuppressions.addResourceSuppressionsByPath(this, '/MultiChannelGenAIDemo/ConfigLambda/ServiceRole/DefaultPolicy/Resource', [
       {
         id: 'AwsSolutions-IAM5',
         reason: 'This is a Custom Resource Lambda that is only used during stack deployment to configure the Bedrock Knowledge Base. The methods have been scoped down according to: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrock.html#amazonbedrock-CreateDataSource and https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonpinpointsmsvoicev2.html#amazonpinpointsmsvoicev2-UpdatePhoneNumber'
@@ -223,10 +228,16 @@ export class CdkBackendStack extends Stack {
       logFormat: 'JSON',
       applicationLogLevel: 'INFO',
       logGroup: logGroup,
+      bundling: {
+        externalModules: [], //forces use local aws-sdk...remove when social-messaging is available in lambda runtime
+      },
       environment: { 
           "APPLICATION_VERSION": `v${this.node.tryGetContext('application_version')} (${new Date().toISOString()})`,
           "CONTEXT_DYNAMODB_TABLE": contextTable.tableName,
           "PHONE_NUMBER_ID": ssmParams.originationNumberId,
+          "SMS_SNS_TOPIC_ARN": chatTopic.topicArn,
+          "WHATSAPP_PHONE_NUMBER_ID": ssmParams.eumWhatsappOriginationNumberId,
+          "WHATSAPP_SNS_TOPIC_ARN": ssmParams.eumWhatsappSNSTopicArn,
           "BEDROCK_MODEL_ID": "anthropic.claude-3-sonnet-20240229-v1:0", // aws bedrock list-foundation-models --by-provider Anthropic
           "SESSION_SECONDS": "600",
           "KNOWLEDGE_BASE_ID": knowledgeBase.knowledgeBaseId, 
@@ -251,6 +262,16 @@ export class CdkBackendStack extends Stack {
               contextTable.tableArn, 
               `${contextTable.tableArn}/*`
             ]
+        }),        
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [                
+            "social-messaging:DeleteWhatsAppMessageMedia",
+            "social-messaging:SendWhatsAppMessage",
+            "social-messaging:PostWhatsAppMessageMedia",
+            "social-messaging:GetWhatsAppMessageMedia"
+          ],
+          resources: [`arn:aws:social-messaging:${this.region}:${this.account}:phone-number-id/*`]
         }),
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -281,15 +302,47 @@ export class CdkBackendStack extends Stack {
       ]
     }));
 
-    NagSuppressions.addResourceSuppressionsByPath(this, '/SMSGenAIDemo/chatProcessorPolicy/Resource', [
+    NagSuppressions.addResourceSuppressionsByPath(this, '/MultiChannelGenAIDemo/chatProcessorPolicy/Resource', [
       {
         id: 'AwsSolutions-IAM5',
         reason: 'The function needs to call the RetrieveAndGenerate API, which has a wildcard resource. There is no way to scope this down based on: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrock.html#amazonbedrock-RetrieveAndGenerate'
       },
     ])
     
-    // subscribe an Lambda to SNS topic
-    chatTopic.addSubscription(new subscriptions.LambdaSubscription(chatProcessorLambda));
+    if (ssmParams.smsEnabled) {
+      // subscribe an Lambda to SMS SNS topic
+      chatTopic.addSubscription(new subscriptions.LambdaSubscription(chatProcessorLambda));
+
+      snsRole.addToPolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "sns:Publish",
+            "sns:Subscribe",
+          ],
+          resources: [
+            chatTopic.topicArn
+          ]
+        })
+      )
+    } 
+    if (ssmParams.whatsappEnabled) {
+      const whatsappTopic = sns.Topic.fromTopicArn(this, 'whatsappTopic', ssmParams.eumWhatsappSNSTopicArn)
+      whatsappTopic.addSubscription(new subscriptions.LambdaSubscription(chatProcessorLambda))
+      //TODO: We could use an SNS Filter Policy to only trigger on messages from users, but the webpayload is also json encoded and SNS Filter Policies don't suport regexes or decoding a JSON payload within the message
+      snsRole.addToPolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            "sts:AssumeRole",
+          ],
+          resources: [
+            ssmParams.eumWhatsappSNSTopicArn
+          ]
+        })
+      )
+    }
+
 
     const configCustomResource = new CustomResource(this, `${configParams.CdkAppName}-ConfigCustomResource`, {
         resourceType: 'Custom::EUMConfig',

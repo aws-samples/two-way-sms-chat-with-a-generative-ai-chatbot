@@ -3,22 +3,32 @@
 const DynamoDBService = require('./services/DynamoDBService.mjs');
 const BedrockService = require('./services/BedrockService.mjs');
 const PinpointService = require('./services/PinpointService.mjs');
+const WhatsAppService = require('./services/WhatsAppService.mjs');
 const xss = require("xss") //https://github.com/leizongmin/js-xss
 
 const restartKeywords = ['restart','begin','commence','initiate','launch','commence','start','demo','go','reset', 'clear']
 
 //Helper Functions
-const sendResponse = async (inboundMessage, outboundMessage, knowledgeBaseId, source, sessionId=undefined) => {
+const sendResponse = async (channel, inboundMessage, outboundMessage, knowledgeBaseId, source, sessionId=undefined) => {
     
-    let pinpointResponse = await PinpointService.sendSMS(inboundMessage.originationNumber, outboundMessage);
+    let outboundMessageId = ''
+    if (channel === 'whatsapp') {
+        await WhatsAppService.markMessageAsRead(inboundMessage.inboundMessageId)
+        let whatsAppResponse = await WhatsAppService.sendWhatsAppMessage(inboundMessage.originationNumber, outboundMessage)
+        outboundMessageId = whatsAppResponse?.messageId
+    } else {
+        let pinpointResponse = await PinpointService.sendSMS(inboundMessage.originationNumber, outboundMessage);
+        outboundMessageId = pinpointResponse?.MessageId
+    }
 
     //Write inbound request to DynamoDB
     const inboundParams = {
         phoneNumber: inboundMessage.originationNumber,
         messageId: inboundMessage.inboundMessageId,
+        channel: channel,
         timestamp: Date.now(),
         message: xss(inboundMessage.messageBody), 
-        originationNumberId: process.env.PHONE_NUMBER_ID,
+        originationNumberId: process.env.EUM_PHONE_NUMBER_ID,
         direction: 'inbound',
         previousPublishedMessageId: inboundMessage.previousPublishedMessageId,
         sessionId: sessionId,
@@ -32,10 +42,11 @@ const sendResponse = async (inboundMessage, outboundMessage, knowledgeBaseId, so
     //Write outbound request to DynamoDB
     const outboundParams = {
         phoneNumber: inboundMessage.originationNumber,
-        messageId: pinpointResponse?.MessageId, 
+        messageId: outboundMessageId, 
+        channel: channel,
         timestamp: Date.now(),
-        message: xss(outboundMessage),
-        originationNumberId: process.env.PHONE_NUMBER_ID,
+        message: xss(outboundMessage), //probably don't need to sanitize response from BR, but why not?
+        originationNumberId: process.env.EUM_PHONE_NUMBER_ID,
         direction: 'outbound',
         previousPublishedMessageId: inboundMessage.previousPublishedMessageId,
         sessionId: sessionId,
@@ -45,9 +56,10 @@ const sendResponse = async (inboundMessage, outboundMessage, knowledgeBaseId, so
     }
     const putOutboundResults = await DynamoDBService.put(process.env.CONTEXT_DYNAMODB_TABLE, outboundParams);
     console.debug('putOutboundResults: ', putOutboundResults);
+
 }
 
-const getConversation = async (phoneNumber) => {
+const getConversation = async (phoneNumber, channel) => {
     try {
         let params = {
             TableName : process.env.CONTEXT_DYNAMODB_TABLE,
@@ -56,6 +68,10 @@ const getConversation = async (phoneNumber) => {
             ExpressionAttributeValues: {
                 ":phoneNumber": phoneNumber
             },
+            FilterExpression: "channel = :channel",
+            ExpressionAttributeValues: {
+                ":channel": channel
+            }
         }
         const getConversationResults = await DynamoDBService.query(params);
         console.debug('Get Conversation Results: ', getConversationResults);
@@ -89,18 +105,48 @@ exports.handler = async (event, context, callback) => {
         console.trace(`Event: `, JSON.stringify(event,null,2));
 
         for (const record of event.Records) {
-            let message = JSON.parse(record.Sns.Message)
-            console.trace(`Message: `, message);
+            console.trace(`Record: `, record);
+            let snsMessage = JSON.parse(record.Sns.Message)
+            let message = {}
+            console.trace(`Message: `, snsMessage);
+
+            let channel = 'sms'
+            console.log(record.Sns.TopicArn)
+            if (record.Sns.TopicArn === process.env.WHATSAPP_SNS_TOPIC_ARN) {
+                channel = 'whatsapp'
+                let whatsappMessage = JSON.parse(snsMessage.whatsAppWebhookEntry)
+                try {
+                    if (whatsappMessage.changes[0]?.value?.messages[0]?.text?.body) { //We have an inbound message
+                        message.originationNumber = '+' + whatsappMessage.changes[0].value?.messages[0]?.from
+                        message.messageBody = whatsappMessage.changes[0].value?.messages[0]?.text?.body
+                        message.inboundMessageId = whatsappMessage.changes[0].value?.messages[0]?.id
+                        message.previousPublishedMessageId = whatsappMessage.changes[0]?.value?.messages[0]?.id 
+                    } else {
+                        //TODO: Still working to add an SNS Filter Policy to only trigger on messages from users, but the webpayload is also json encoded and SNS Filter Policies don't suport regexes or decoding a JSON payload within the message
+                        console.warn('No message found.')
+                        callback(null,{})
+                        return
+                    }
+                }
+                catch (error) {
+                    console.error(error)
+                    console.warn('No message found.')
+                    callback(null,{})
+                    return
+                }
+            } else {
+                message = snsMessage
+            }
 
             if(restartKeywords.includes(message.messageBody.toLowerCase().trim())){
                 //restart conversation
                 console.debug('restart conversation')
                 await DynamoDBService.deleteItemsByPartitionKey(process.env.CONTEXT_DYNAMODB_TABLE, 'phoneNumber', message.originationNumber)
-                await sendResponse(message,'Please ask a question.',process.env.KNOWLEDGE_BASE_ID);
+                await sendResponse(channel, message,'Please ask a question.',process.env.KNOWLEDGE_BASE_ID);
 
             } else {
                 //Get Conversation
-                let conversation = await getConversation(message.originationNumber)
+                let conversation = await getConversation(message.originationNumber, channel)
 
                 //Set Session Id if we have one.
                 let sessionId = false
@@ -133,7 +179,7 @@ exports.handler = async (event, context, callback) => {
                 } 
 
                 if (!sessionId) sessionId = retrieveResponse.sessionId //making sure we carry over sessionID across different LLMs
-                await sendResponse(message, response, process.env.KNOWLEDGE_BASE_ID, source, sessionId)
+                await sendResponse(channel, message, response, process.env.KNOWLEDGE_BASE_ID, source, sessionId)
 
                 callback(null,{})
             }
